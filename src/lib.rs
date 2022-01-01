@@ -108,7 +108,10 @@ impl MJpeg {
     ///     m.update_jpeg(b).unwrap();
     /// }
     /// ```
-    pub fn run<A: ToSocketAddrs>(&self, addr: A) -> Result<(), Box<dyn Error>> {
+    pub fn run<A: ToSocketAddrs>(
+        &self,
+        addr: A,
+    ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         let server = TcpListener::bind(addr)?;
         for stream in server.incoming() {
             let recv = self.recv.clone();
