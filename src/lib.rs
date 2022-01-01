@@ -6,11 +6,29 @@ use std::{
     thread,
 };
 
-use crossbeam_channel::{bounded, Receiver, SendError, Sender, TrySendError};
+use crossbeam_channel::{bounded, Receiver, SendError, Sender, TrySelectError, TrySendError};
+
+struct Frame {
+    header: Vec<u8>,
+    body: Vec<u8>,
+}
+
+impl Frame {
+    fn from_jpeg_buf(buf: Vec<u8>) -> Self {
+        Self {
+            header: format!(
+                "\r\n--MJPEGBOUNDARY\r\nContent-Length: {}\r\nX-Timestamp: 0.000000\r\n\r\n",
+                buf.len()
+            )
+            .into_bytes(),
+            body: buf,
+        }
+    }
+}
 
 pub struct MJpeg {
-    send: Sender<Vec<u8>>,
-    recv: Arc<Mutex<Receiver<Vec<u8>>>>,
+    send: Sender<Frame>,
+    recv: Arc<Mutex<Receiver<Frame>>>,
 }
 
 impl MJpeg {
@@ -20,7 +38,7 @@ impl MJpeg {
     /// let m = Arc::new(MJpeg::new());
     /// ```
     pub fn new() -> Self {
-        let (send, recv) = bounded::<Vec<u8>>(1);
+        let (send, recv) = bounded(1);
         let recv = Arc::new(Mutex::new(recv));
         Self { send, recv }
     }
@@ -39,8 +57,9 @@ impl MJpeg {
     // FIXME: convert this error into our own type (or the one from std),
     // to avoid exposing our dependency on crossbeam channel.
     pub fn update_jpeg(&self, buf: Vec<u8>) -> Result<(), SendError<Vec<u8>>> {
-        self.send.send(buf)?;
-        Ok(())
+        self.send
+            .send(Frame::from_jpeg_buf(buf))
+            .map_err(|e| SendError(e.0.body))
     }
 
     /// 将流推送到mjpeg
@@ -64,8 +83,12 @@ impl MJpeg {
     // FIXME: convert this error into our own type (or the one from std),
     // to avoid exposing our dependency on crossbeam channel.
     pub fn try_update_jpeg(&self, buf: Vec<u8>) -> Result<(), TrySendError<Vec<u8>>> {
-        self.send.send(buf)?;
-        Ok(())
+        self.send
+            .try_send(Frame::from_jpeg_buf(buf))
+            .map_err(|e| match e {
+                TrySendError::Disconnected(frame) => TrySendError::Disconnected(frame.body),
+                TrySendError::Full(frame) => TrySendError::Full(frame.body),
+            })
     }
 
     /// Ask whether the jpeg queue is full (happens when the reader disconnects or is slow to respond)
@@ -96,11 +119,10 @@ impl MJpeg {
                     stream.flush().unwrap();
                     loop {
                         match recv.lock().map(|buf| buf.recv()) {
-                            Ok(buf) => match buf {
-                                Ok(mut buf) => {
-                                    let header = format!("\r\n--MJPEGBOUNDARY\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\nX-Timestamp: 0.000000\r\n\r\n",buf.len());
-                                    stream.write(header.as_bytes()).unwrap();
-                                    stream.write(&buf).unwrap();
+                            Ok(frame) => match frame {
+                                Ok(mut frame) => {
+                                    stream.write(&frame.header).unwrap();
+                                    stream.write(&frame.body).unwrap();
                                     stream.flush().unwrap();
                                 }
                                 Err(e) => {
