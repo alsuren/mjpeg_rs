@@ -99,10 +99,8 @@ impl MJpeg {
                             Ok(buf) => match buf {
                                 Ok(mut buf) => {
                                     let header = format!("\r\n--MJPEGBOUNDARY\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\nX-Timestamp: 0.000000\r\n\r\n",buf.len());
-                                    let header = header.as_bytes();
-                                    let mut header = header.to_vec();
-                                    header.append(&mut buf);
-                                    stream.write(&mut header).unwrap();
+                                    stream.write(header.as_bytes()).unwrap();
+                                    stream.write(&buf).unwrap();
                                     stream.flush().unwrap();
                                 }
                                 Err(e) => {
